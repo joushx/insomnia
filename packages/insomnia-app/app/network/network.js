@@ -8,14 +8,14 @@ import {getRenderContext, getRenderedRequest} from '../common/render';
 import mkdirp from 'mkdirp';
 import clone from 'clone';
 import {parse as urlParse, resolve as urlResolve} from 'url';
-import {Curl} from 'insomnia-node-libcurl';
+import Curl from '../proxies/curl/curl-client';
 import {join as pathJoin} from 'path';
 import uuid from 'uuid';
 import * as electron from 'electron';
 import * as models from '../models';
 import {AUTH_AWS_IAM, AUTH_BASIC, AUTH_DIGEST, AUTH_NETRC, AUTH_NTLM, CONTENT_TYPE_FORM_DATA, CONTENT_TYPE_FORM_URLENCODED, getAppVersion, getTempDir, STATUS_CODE_PLUGIN_ERROR} from '../common/constants';
-import {delay, describeByteSize, getContentTypeHeader, getLocationHeader, getSetCookieHeaders, hasAcceptEncodingHeader, hasAcceptHeader, hasAuthHeader, hasContentTypeHeader, hasUserAgentHeader, waitForStreamToFinish} from '../common/misc';
-import {setDefaultProtocol, smartEncodeUrl, buildQueryStringFromParams, joinUrlAndQueryString} from 'insomnia-url';
+import {delay, describeByteSize, getContentTypeHeader, getLocationHeader, getSetCookieHeaders, hasAcceptEncodingHeader, hasAcceptHeader, hasAuthHeader, hasContentTypeHeader, hasUserAgentHeader} from '../common/misc';
+import {buildQueryStringFromParams, joinUrlAndQueryString, setDefaultProtocol, smartEncodeUrl} from 'insomnia-url';
 import fs from 'fs';
 import * as db from '../common/database';
 import * as CACerts from './cacert';
@@ -70,7 +70,10 @@ export async function _actuallySend (
     let timeline: Array<ResponseTimelineEntry> = [];
 
     // Initialize the curl handle
-    const curl = new Curl();
+    const responsesDir = pathJoin(app.getPath('userData'), 'responses');
+    mkdirp.sync(responsesDir);
+    const responseBodyPath = pathJoin(responsesDir, uuid.v4() + '.response');
+    const curl = new Curl(responseBodyPath);
 
     /** Helper function to respond with a success */
     function respond (patch: ResponsePatch, bodyPath: ?string): void {
@@ -123,33 +126,35 @@ export async function _actuallySend (
       }
     }
 
-    function enable (feature: number) {
-      curl.enable(feature);
+    async function enable (feature: number) {
+      await curl.enable(feature);
     }
 
     try {
       // Setup the cancellation logic
-      cancelRequestFunction = () => {
+      cancelRequestFunction = async () => {
         respond({
-          elapsedTime: curl.getInfo(Curl.info.TOTAL_TIME) * 1000,
-          bytesRead: curl.getInfo(Curl.info.SIZE_DOWNLOAD),
-          url: curl.getInfo(Curl.info.EFFECTIVE_URL),
+          elapsedTime: await curl.getInfo(Curl.info.TOTAL_TIME) * 1000,
+          bytesRead: await curl.getInfo(Curl.info.SIZE_DOWNLOAD),
+          url: await curl.getInfo(Curl.info.EFFECTIVE_URL),
           statusMessage: 'Cancelled',
           error: 'Request was cancelled'
         });
 
         // Kill it!
-        curl.close();
+        process.nextTick(async () => {
+          await curl.close();
+        });
       };
 
       // Set all the basic options
       setOpt(Curl.option.FOLLOWLOCATION, settings.followRedirects);
       setOpt(Curl.option.TIMEOUT_MS, settings.timeout); // 0 for no timeout
       setOpt(Curl.option.VERBOSE, true); // True so debug function works
-      setOpt(Curl.option.NOPROGRESS, false); // False so progress function works
       setOpt(Curl.option.ACCEPT_ENCODING, ''); // Auto decode everything
-      enable(Curl.feature.NO_HEADER_PARSING);
-      enable(Curl.feature.NO_DATA_PARSING);
+      setOpt(Curl.option.DNS_CACHE_TIMEOUT, 0);
+      await enable(Curl.feature.NO_HEADER_PARSING);
+      await enable(Curl.feature.NO_DATA_PARSING);
 
       // Set maximum amount of redirects allowed
       // NOTE: Setting this to -1 breaks some versions of libcurl
@@ -218,22 +223,6 @@ export async function _actuallySend (
       // Set the headers (to be modified as we go)
       const headers = clone(renderedRequest.headers);
 
-      let lastPercent = 0;
-      // NOTE: This option was added in 7.32.0 so make it optional
-      setOpt(Curl.option.XFERINFOFUNCTION, (dltotal, dlnow, ultotal, ulnow) => {
-        if (dltotal === 0) {
-          return 0;
-        }
-
-        const percent = Math.round(dlnow / dltotal * 100);
-        if (percent !== lastPercent) {
-          // console.log(`[network] Request downloaded ${percent}%`);
-          lastPercent = percent;
-        }
-
-        return 0;
-      }, true);
-
       // Set the URL, including the query parameters
       const qs = buildQueryStringFromParams(renderedRequest.parameters);
       const url = joinUrlAndQueryString(renderedRequest.url, qs);
@@ -291,7 +280,7 @@ export async function _actuallySend (
       if (renderedRequest.settingSendCookies) {
         // Tell Curl to store cookies that it receives. This is only important if we receive
         // a cookie on a redirect that needs to be sent on the next request in the chain.
-        curl.setOpt(Curl.option.COOKIEFILE, '');
+        setOpt(Curl.option.COOKIEFILE, '');
 
         const cookies = renderedRequest.cookieJar.cookies || [];
         for (const cookie of cookies) {
@@ -471,19 +460,6 @@ export async function _actuallySend (
         setOpt(Curl.option.POSTFIELDS, requestBody);
       }
 
-      let responseBodyBytes = 0;
-      const responsesDir = pathJoin(app.getPath('userData'), 'responses');
-      mkdirp.sync(responsesDir);
-      const responseBodyPath = pathJoin(responsesDir, uuid.v4() + '.response');
-      const responseBodyWriteStream = fs.createWriteStream(responseBodyPath);
-      curl.on('end', () => responseBodyWriteStream.end());
-      curl.on('error', () => responseBodyWriteStream.end());
-      setOpt(Curl.option.WRITEFUNCTION, (buff: Buffer) => {
-        responseBodyBytes += buff.length;
-        responseBodyWriteStream.write(buff);
-        return buff.length;
-      });
-
       // Handle Authorization header
       if (!hasAuthHeader(headers) && !renderedRequest.authentication.disabled) {
         if (renderedRequest.authentication.type === AUTH_BASIC) {
@@ -629,17 +605,16 @@ export async function _actuallySend (
           statusCode,
           httpVersion,
           statusMessage,
-          elapsedTime: curl.getInfo(Curl.info.TOTAL_TIME) * 1000,
-          bytesRead: curl.getInfo(Curl.info.SIZE_DOWNLOAD),
-          bytesContent: responseBodyBytes,
-          url: curl.getInfo(Curl.info.EFFECTIVE_URL)
+          elapsedTime: await curl.getInfo(Curl.info.TOTAL_TIME) * 1000,
+          bytesRead: await curl.getInfo(Curl.info.SIZE_DOWNLOAD),
+          bytesContent: await curl.SPECIALGetBytesRead(),
+          url: await curl.getInfo(Curl.info.EFFECTIVE_URL)
         };
 
-        // Close the request
-        curl.close();
+        console.log('RIES', responsePatch);
 
-        // Make sure the response body has been fully written first
-        await waitForStreamToFinish(responseBodyWriteStream);
+        // Close the request
+        await curl.close();
 
         respond(responsePatch, responseBodyPath);
       });
@@ -656,7 +631,7 @@ export async function _actuallySend (
         respond({statusMessage, error});
       });
 
-      curl.perform();
+      await curl.perform();
     } catch (err) {
       handleError(err);
     }

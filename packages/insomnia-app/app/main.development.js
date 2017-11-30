@@ -6,6 +6,7 @@ import * as updates from './main/updates';
 import * as windowUtils from './main/window-utils';
 import * as models from './models/index';
 import * as database from './common/database';
+import * as curl from './proxies/curl/remote';
 import {CHANGELOG_BASE_URL, getAppVersion, isDevelopment, isMac} from './common/constants';
 import {trackNonInteractiveEvent} from './common/analytics';
 import type {ToastNotification} from './ui/components/toast';
@@ -28,6 +29,7 @@ app.on('ready', async () => {
   await database.init(models.types());
   await errorHandling.init();
   await windowUtils.init();
+  await curl.init();
 
   // Init the app
   await _trackStats();
