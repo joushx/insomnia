@@ -8,8 +8,9 @@ import CodeEditor from '../codemirror/code-editor';
 import ResponseWebView from './response-webview';
 import MultipartViewer from './response-multipart';
 import ResponseRaw from './response-raw';
+import TemplateViewer from './response-template';
 import ResponseError from './response-error';
-import {HUGE_RESPONSE_MB, LARGE_RESPONSE_MB, PREVIEW_MODE_FRIENDLY, PREVIEW_MODE_RAW} from '../../../common/constants';
+import {HUGE_RESPONSE_MB, LARGE_RESPONSE_MB, PREVIEW_MODE_FRIENDLY, PREVIEW_MODE_RAW, PREVIEW_MODE_TEMPLATE} from '../../../common/constants';
 import Wrap from '../wrap';
 
 let alwaysShowLargeResponses = false;
@@ -151,7 +152,8 @@ class ResponseViewer extends React.Component<Props, State> {
       previewMode,
       responseId,
       updateFilter,
-      url
+      url,
+      request
     } = this.props;
 
     let contentType = this.props.contentType;
@@ -314,6 +316,22 @@ class ResponseViewer extends React.Component<Props, State> {
           fontSize={editorFontSize}
         />
       );
+    } else if (previewMode === PREVIEW_MODE_TEMPLATE && ct.indexOf('application/json') === 0){
+
+      // decode response 
+      const match = contentType.match(/charset=([\w-]+)/);
+      const charset = (match && match.length >= 2) ? match[1] : 'utf-8';
+      let body;
+      try {
+        body = iconv.decode(bodyBuffer, charset);
+      } catch (err) {
+        body = bodyBuffer.toString();
+        console.warn('[response] Failed to decode body', err);
+      }
+
+      return (
+        <TemplateViewer data={body} request={request}/>
+      )
     } else { // Show everything else as "source"
       const match = contentType.match(/charset=([\w-]+)/);
       const charset = (match && match.length >= 2) ? match[1] : 'utf-8';

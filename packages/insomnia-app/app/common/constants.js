@@ -118,11 +118,13 @@ export const HTTP_METHODS = [
 export const PREVIEW_MODE_FRIENDLY = 'friendly';
 export const PREVIEW_MODE_SOURCE = 'source';
 export const PREVIEW_MODE_RAW = 'raw';
+export const PREVIEW_MODE_TEMPLATE = 'template';
 
 const previewModeMap = {
   [PREVIEW_MODE_FRIENDLY]: ['Preview', 'Visual Preview'],
   [PREVIEW_MODE_SOURCE]: ['Source', 'Source Code'],
-  [PREVIEW_MODE_RAW]: ['Raw', 'Raw Data']
+  [PREVIEW_MODE_RAW]: ['Raw', 'Raw Data'],
+  [PREVIEW_MODE_TEMPLATE]: ['Template', 'Template Rendering']
 };
 
 export const PREVIEW_MODES = Object.keys(previewModeMap);

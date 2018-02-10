@@ -295,6 +295,7 @@ class ResponsePane extends React.PureComponent<Props> {
                 editorIndentSize={editorIndentSize}
                 editorKeyMap={editorKeyMap}
                 url={response.url}
+                request={request}
               />
             </ErrorBoundary>
           </TabPanel>
